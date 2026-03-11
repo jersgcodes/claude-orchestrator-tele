@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 import orchestrator.queue as q
@@ -50,6 +50,30 @@ def _default_project() -> str:
     return next(iter(active), "")
 
 
+def _status_keyboard(paused: bool, queue_empty: bool) -> InlineKeyboardMarkup:
+    row1 = [
+        InlineKeyboardButton("⏸ Stop" if not paused else "▶️ Resume",
+                             callback_data="orch:stop" if not paused else "orch:resume"),
+    ]
+    if not queue_empty:
+        row1.append(InlineKeyboardButton("⏭ Skip next", callback_data="orch:skip"))
+    row2 = []
+    if not queue_empty:
+        row2.append(InlineKeyboardButton("🗑 Clear queue", callback_data="orch:clear"))
+    rows = [row1]
+    if row2:
+        rows.append(row2)
+    return InlineKeyboardMarkup(rows)
+
+
+def _list_keyboard(project: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Queue next 1", callback_data=f"orch:qnext:{project}:1"),
+        InlineKeyboardButton("Queue next 3", callback_data=f"orch:qnext:{project}:3"),
+        InlineKeyboardButton("Queue next 5", callback_data=f"orch:qnext:{project}:5"),
+    ]])
+
+
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Show next 10 PENDING tasks for a project."""
     project = ctx.args[0] if ctx.args else _default_project()
@@ -69,7 +93,11 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     for i, t in enumerate(tasks, 1):
         lines.append(f"  `{i}` {t['title']}")
     lines.append(f"\nUse `/queue {project} 1 3 5` to queue by number.")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=_list_keyboard(project),
+    )
 
 
 async def cmd_queue(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -161,7 +189,11 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if len(tasks) > 10:
             lines.append(f"  ... and {len(tasks) - 10} more")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=_status_keyboard(paused, not tasks),
+    )
 
 
 async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -204,4 +236,88 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "`/clear` — clear entire queue\n"
         "`/help` — this message"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📋 List tasks", callback_data="orch:list"),
+        InlineKeyboardButton("📊 Status", callback_data="orch:status"),
+    ]])
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle all orch: inline button presses."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data  # e.g. "orch:stop", "orch:qnext:smebot:3"
+
+    if data == "orch:stop":
+        q.set_paused(True)
+        await query.edit_message_reply_markup(_status_keyboard(True, q.is_empty()))
+
+    elif data == "orch:resume":
+        q.set_paused(False)
+        await query.edit_message_reply_markup(_status_keyboard(False, q.is_empty()))
+
+    elif data == "orch:skip":
+        task = q.skip_next()
+        msg = f"⏭ Skipped: _{task['title']}_" if task else "Queue is empty."
+        await query.answer(msg, show_alert=True)
+        await query.edit_message_reply_markup(_status_keyboard(q.is_paused(), q.is_empty()))
+
+    elif data == "orch:clear":
+        count = len(q.all_tasks())
+        q.clear()
+        await query.answer(f"🗑 Cleared {count} task(s).", show_alert=True)
+        await query.edit_message_reply_markup(_status_keyboard(q.is_paused(), True))
+
+    elif data.startswith("orch:qnext:"):
+        _, _, project, n_str = data.split(":")
+        n = int(n_str)
+        repo_path = _get_repo_path(project)
+        tasks_file = _get_tasks_file(project)
+        pending = get_next_tasks(repo_path, tasks_file, n=n)
+        for t in pending:
+            t["project"] = project
+        added = q.add_tasks(pending)
+        await query.answer(f"✅ Queued {added} task(s).", show_alert=True)
+
+    elif data == "orch:list":
+        project = _default_project()
+        if not project:
+            await query.answer("No active projects.", show_alert=True)
+            return
+        repo_path = _get_repo_path(project)
+        tasks_file = _get_tasks_file(project)
+        tasks = get_next_tasks(repo_path, tasks_file, n=10)
+        if not tasks:
+            await query.answer(f"No PENDING tasks in {project}.", show_alert=True)
+            return
+        lines = [f"📋 *{project}* — PENDING tasks:\n"]
+        for i, t in enumerate(tasks, 1):
+            lines.append(f"  `{i}` {t['title']}")
+        await query.message.reply_text(
+            "\n".join(lines),
+            parse_mode="Markdown",
+            reply_markup=_list_keyboard(project),
+        )
+
+    elif data == "orch:status":
+        tasks = q.all_tasks()
+        lim = q.get_limit()
+        paused = q.is_paused()
+        lines = ["📊 *Status*\n"]
+        if lim.get("reset_at"):
+            from datetime import datetime, timezone
+            reset = datetime.fromisoformat(lim["reset_at"])
+            remaining = time_until(reset)
+            ltype = lim.get("type", "unknown").upper()
+            lines.append(f"{'🔴 LIMIT HIT' if q.is_limit_hit() else '🟢 Limits OK'} ({ltype})")
+            lines.append(f"Resets in {remaining}")
+        else:
+            lines.append("🟢 No limits hit")
+        lines.append(f"{'⏸ Paused' if paused else '▶️ Running'}")
+        lines.append(f"📋 {len(tasks)} task(s) in queue")
+        await query.message.reply_text(
+            "\n".join(lines),
+            parse_mode="Markdown",
+            reply_markup=_status_keyboard(paused, not tasks),
+        )

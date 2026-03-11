@@ -17,12 +17,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from telegram.ext import Application, CommandHandler
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 import orchestrator.queue as q
 from orchestrator.bot import (
     cmd_clear, cmd_help, cmd_list, cmd_queue,
     cmd_resume, cmd_skip, cmd_status, cmd_stop,
+    on_button,
 )
 from orchestrator.config import load as load_config, active_projects
 from orchestrator.limits import probe, detect_limit_type, parse_reset_time, is_limit_error, time_until
@@ -167,8 +168,21 @@ async def _tick(app: Application) -> None:
         logger.error("Task failed: %s\n%s", task["title"], output[:400])
 
 
+async def _set_commands(app: Application) -> None:
+    await app.bot.set_my_commands([
+        ("list",   "list <project> — show next 10 PENDING tasks"),
+        ("queue",  "queue <project> next [n] — add tasks to queue"),
+        ("status", "queue contents + limit state"),
+        ("stop",   "pause execution (queue preserved)"),
+        ("resume", "resume execution"),
+        ("skip",   "move next queued task to end"),
+        ("clear",  "wipe entire queue"),
+        ("help",   "show all commands"),
+    ])
+
+
 def build_app(bot_token: str) -> Application:
-    app = Application.builder().token(bot_token).build()
+    app = Application.builder().token(bot_token).post_init(_set_commands).build()
     app.add_handler(CommandHandler("list",   cmd_list))
     app.add_handler(CommandHandler("queue",  cmd_queue))
     app.add_handler(CommandHandler("status", cmd_status))
@@ -178,6 +192,7 @@ def build_app(bot_token: str) -> Application:
     app.add_handler(CommandHandler("clear",  cmd_clear))
     app.add_handler(CommandHandler("help",   cmd_help))
     app.add_handler(CommandHandler("start",  cmd_help))
+    app.add_handler(CallbackQueryHandler(on_button, pattern="^orch:"))
     return app
 
 

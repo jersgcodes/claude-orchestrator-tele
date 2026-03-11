@@ -34,14 +34,23 @@ https://api.telegram.org/bot<TOKEN>/getUpdates
 ```
 Look for `"chat": {"id": 123456789}`.
 
-### 2. Install dependencies
+### 2. Clone to a local (non-cloud) path
+
+**Important:** launchd cannot read files from iCloud, OneDrive, or other cloud-synced folders due to macOS TCC restrictions. Clone to a local path:
+
 ```bash
-cd claude-orchestrator-tele
-python -m venv .venv && source .venv/bin/activate
+# Recommended: ~/Library/Application Support/ (always accessible to launchd)
+git clone https://github.com/jersgcodes/claude-orchestrator-tele \
+  "$HOME/Library/Application Support/claude-orchestrator"
+```
+
+### 3. Install dependencies
+```bash
+cd "$HOME/Library/Application Support/claude-orchestrator"
 pip install -r requirements.txt
 ```
 
-### 3. Configure projects
+### 4. Configure projects
 Create `projects.local.yaml` (gitignored — keeps your local paths private):
 ```yaml
 telegram:
@@ -55,20 +64,20 @@ projects:
 
 Add more projects in `projects.yaml` (set `active: true`), paths in `projects.local.yaml`.
 
-### 4. Run
+### 5. Run
 ```bash
 # One-off (test it works):
-python mac_daemon.py
+python3 mac_daemon.py
 
 # Install as macOS service (starts on login, restarts on crash):
 export TELEGRAM_BOT_TOKEN=xxx
 export TELEGRAM_CHAT_ID=yyy
-python install.py
+python3 install.py
 ```
 
-### 5. Uninstall service
+### 6. Uninstall service
 ```bash
-python install.py remove
+python3 install.py remove
 ```
 
 ## Telegram commands

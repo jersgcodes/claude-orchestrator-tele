@@ -42,7 +42,7 @@ def probe(claude_path: str = CLAUDE_PATH) -> tuple[bool, str]:
     """
     try:
         result = subprocess.run(
-            [claude_path, "--print", "--dangerously-skip-permissions", PROBE_PROMPT],
+            [claude_path, "--print", PROBE_PROMPT],
             capture_output=True,
             text=True,
             timeout=30,

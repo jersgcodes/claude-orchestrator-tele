@@ -35,6 +35,7 @@ def install() -> None:
         print("  python install.py")
         sys.exit(1)
 
+    repo_dir = str(Path(__file__).parent.resolve())
     plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -55,6 +56,8 @@ def install() -> None:
         <string>{bot_token}</string>
         <key>TELEGRAM_CHAT_ID</key>
         <string>{chat_id}</string>
+        <key>PYTHONPATH</key>
+        <string>{repo_dir}</string>
     </dict>
 
     <key>RunAtLoad</key>
@@ -68,9 +71,6 @@ def install() -> None:
 
     <key>StandardErrorPath</key>
     <string>{LOG_DIR}/orchestrator-error.log</string>
-
-    <key>WorkingDirectory</key>
-    <string>{Path(__file__).parent.resolve()}</string>
 </dict>
 </plist>
 """

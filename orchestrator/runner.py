@@ -37,7 +37,6 @@ def run_task(task: dict, proj_cfg: dict, claude_path: str = CLAUDE_PATH) -> tupl
             [
                 claude_path,
                 "--print",
-                "--dangerously-skip-permissions",
                 "--allowedTools", "Edit,Write,Read,Bash,Glob,Grep",
                 prompt,
             ],
