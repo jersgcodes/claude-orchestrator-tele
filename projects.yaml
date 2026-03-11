@@ -1,0 +1,40 @@
+# Claude Orchestrator — Project Configuration
+#
+# Add one entry per project. Set active: false to pause orchestration.
+# Sensitive values (tokens, chat_id, repo paths) go in projects.local.yaml (gitignored).
+#
+# To add a new project:
+#   1. Add an entry below with active: true
+#   2. Set repo_path in projects.local.yaml (keeps your local paths out of git)
+#   3. Ensure the repo has a tasks_file with "Status: PENDING" tasks
+#   4. Restart mac_daemon.py
+#
+# Telegram commands:
+#   /list <project>           — show PENDING tasks with index numbers
+#   /queue <project> 1 2 3    — queue tasks by index
+#   /queue <project> next [n] — queue next n tasks
+#   /status                   — queue + limit state across all projects
+#   /stop / /resume           — pause / unpause
+#   /skip                     — move next task to end of queue
+#   /clear                    — wipe queue
+
+telegram:
+  bot_token: ""          # override via TELEGRAM_BOT_TOKEN env var
+  admin_chat_id: 0       # override via TELEGRAM_CHAT_ID env var
+
+projects:
+  smebot:
+    active: true
+    repo_path: ""                  # set in projects.local.yaml
+    tasks_file: "docs/tasks.md"
+    claude_md: "CLAUDE.md"
+    branch: "main"
+
+  # ── Add more projects below ──────────────────────────────────────────────
+  #
+  # another-project:
+  #   active: false                # set true to activate
+  #   repo_path: ""               # set in projects.local.yaml
+  #   tasks_file: "tasks.md"
+  #   claude_md: "CLAUDE.md"
+  #   branch: "main"

@@ -1,0 +1,5 @@
+projects.local.yaml
+__pycache__/
+*.pyc
+.venv/
+.env

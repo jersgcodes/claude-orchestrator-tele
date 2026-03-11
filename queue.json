@@ -1,0 +1,9 @@
+{
+  "tasks": [],
+  "paused": false,
+  "limit": {
+    "type": null,
+    "hit_at": null,
+    "reset_at": null
+  }
+}
