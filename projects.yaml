@@ -42,4 +42,4 @@ projects:
     repo_path: ""          # set in projects.local.yaml
     tasks_file: "TASKS.md"
     claude_md: "CLAUDE.md"
-    branch: "main"
+    branch: "master"
