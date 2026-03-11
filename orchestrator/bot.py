@@ -2,6 +2,7 @@
 Telegram bot handlers — queue control via commands.
 
 Commands:
+  /menu                     — main menu with inline buttons (hamburger menu)
   /list [project]           — show next 10 PENDING tasks with index numbers
   /queue <project> 1 2 3    — add tasks by index to queue
   /queue <project> next [n] — add next n pending tasks (default 1)
@@ -11,6 +12,16 @@ Commands:
   /skip                     — skip the next queued task (move to end)
   /clear                    — clear entire queue
   /help                     — show commands
+
+Inline button callbacks (orch: prefix):
+  orch:menu                 — show/refresh main menu
+  orch:stop / orch:resume   — toggle pause
+  orch:skip                 — skip next task
+  orch:clear                — clear queue
+  orch:list                 — show pending tasks (default project)
+  orch:status               — show status
+  orch:help                 — show help text
+  orch:qnext:<project>:<n>  — queue next n tasks for project
 """
 from __future__ import annotations
 
@@ -63,15 +74,41 @@ def _status_keyboard(paused: bool, queue_empty: bool) -> InlineKeyboardMarkup:
     rows = [row1]
     if row2:
         rows.append(row2)
+    rows.append([InlineKeyboardButton("☰ Menu", callback_data="orch:menu")])
     return InlineKeyboardMarkup(rows)
 
 
 def _list_keyboard(project: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("Queue next 1", callback_data=f"orch:qnext:{project}:1"),
-        InlineKeyboardButton("Queue next 3", callback_data=f"orch:qnext:{project}:3"),
-        InlineKeyboardButton("Queue next 5", callback_data=f"orch:qnext:{project}:5"),
-    ]])
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Queue next 1", callback_data=f"orch:qnext:{project}:1"),
+            InlineKeyboardButton("Queue next 3", callback_data=f"orch:qnext:{project}:3"),
+            InlineKeyboardButton("Queue next 5", callback_data=f"orch:qnext:{project}:5"),
+        ],
+        [InlineKeyboardButton("☰ Menu", callback_data="orch:menu")],
+    ])
+
+
+def _main_menu_keyboard(paused: bool, queue_empty: bool) -> InlineKeyboardMarkup:
+    stop_resume = InlineKeyboardButton(
+        "▶️ Resume" if paused else "⏸ Stop",
+        callback_data="orch:resume" if paused else "orch:stop",
+    )
+    row_actions = [stop_resume]
+    if not queue_empty:
+        row_actions.append(InlineKeyboardButton("⏭ Skip Next", callback_data="orch:skip"))
+
+    rows = [
+        [
+            InlineKeyboardButton("📋 List Tasks", callback_data="orch:list"),
+            InlineKeyboardButton("📊 Status", callback_data="orch:status"),
+        ],
+        row_actions,
+    ]
+    if not queue_empty:
+        rows.append([InlineKeyboardButton("🗑 Clear Queue", callback_data="orch:clear")])
+    rows.append([InlineKeyboardButton("❓ Help", callback_data="orch:help")])
+    return InlineKeyboardMarkup(rows)
 
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -223,6 +260,25 @@ async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"🗑 Cleared {count} task(s) from queue.")
 
 
+async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the main menu with inline buttons for all actions."""
+    paused = q.is_paused()
+    tasks = q.all_tasks()
+    limit_state = "🔴 Limit hit" if q.is_limit_hit() else "🟢 Limits OK"
+    status = "⏸ Paused" if paused else "▶️ Running"
+    queue_info = f"📋 {len(tasks)} task(s) queued" if tasks else "📋 Queue empty"
+    text = (
+        "☰ *Claude Orchestrator*\n\n"
+        f"{limit_state} · {status}\n"
+        f"{queue_info}"
+    )
+    await update.message.reply_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=_main_menu_keyboard(paused, not tasks),
+    )
+
+
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "*Claude Orchestrator Commands*\n\n"
@@ -321,3 +377,36 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode="Markdown",
             reply_markup=_status_keyboard(paused, not tasks),
         )
+
+    elif data == "orch:menu":
+        paused = q.is_paused()
+        tasks = q.all_tasks()
+        limit_state = "🔴 Limit hit" if q.is_limit_hit() else "🟢 Limits OK"
+        status = "⏸ Paused" if paused else "▶️ Running"
+        queue_info = f"📋 {len(tasks)} task(s) queued" if tasks else "📋 Queue empty"
+        text = (
+            "☰ *Claude Orchestrator*\n\n"
+            f"{limit_state} · {status}\n"
+            f"{queue_info}"
+        )
+        await query.message.reply_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=_main_menu_keyboard(paused, not tasks),
+        )
+
+    elif data == "orch:help":
+        text = (
+            "*Claude Orchestrator Commands*\n\n"
+            "`/list [project]` — show PENDING tasks\n"
+            "`/queue <project> 1 2 3` — queue by index\n"
+            "`/queue <project> next [n]` — queue next n tasks\n"
+            "`/status` — queue + limit state\n"
+            "`/stop` — pause execution\n"
+            "`/resume` — resume execution\n"
+            "`/skip` — skip next task (move to end)\n"
+            "`/clear` — clear entire queue\n"
+            "`/menu` — show this menu\n"
+            "`/help` — this message"
+        )
+        await query.message.reply_text(text, parse_mode="Markdown")
