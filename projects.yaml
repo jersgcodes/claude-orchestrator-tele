@@ -19,13 +19,13 @@
 #   /clear                    — wipe queue
 
 telegram:
-  bot_token: ""          # set in projects.local.yaml — never commit tokens here
+  bot_token: ""          # set in projects.local.yaml — never put tokens here
   admin_chat_id: 0       # set in projects.local.yaml
 
 projects:
   smebot:
     active: true
-    repo_path: ""                  # set in projects.local.yaml
+    repo_path: ""          # set in projects.local.yaml
     tasks_file: "docs/tasks.md"
     claude_md: "CLAUDE.md"
     branch: "background-builds"
