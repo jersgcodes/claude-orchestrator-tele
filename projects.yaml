@@ -30,11 +30,16 @@ projects:
     claude_md: "CLAUDE.md"
     branch: "background-builds"
 
-  # ── Add more projects below ──────────────────────────────────────────────
-  #
-  # another-project:
-  #   active: false                # set true to activate
-  #   repo_path: ""               # set in projects.local.yaml
-  #   tasks_file: "tasks.md"
-  #   claude_md: "CLAUDE.md"
-  #   branch: "main"
+  investment-analyst:
+    active: true
+    repo_path: ""          # set in projects.local.yaml
+    tasks_file: "TASKS.md"
+    claude_md: "CLAUDE.md"
+    branch: "main"
+
+  spending-monitor:
+    active: true
+    repo_path: ""          # set in projects.local.yaml
+    tasks_file: "TASKS.md"
+    claude_md: "CLAUDE.md"
+    branch: "main"
