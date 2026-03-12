@@ -116,12 +116,21 @@ Allow users to pre-approve specific bash commands for a task before it runs, wit
 6. Task runs with only those specific bash commands pre-approved — no blanket skip
 
 **Implemented:**
-- `dry_run_analysis()` in `runner.py`
+- `task_reader.py` parses `**Requires approval:**` bullet section from tasks.md into `task["requires_approval"]`
+- Tasks declare their own required commands — no auto-analysis, no project flag needed
 - `set_task_pending_approval()`, `approve_task()`, `deny_task()`, `get_task()` in `queue.py`
-- `peek_next()` skips `pending_approval` tasks
-- `_request_task_approval()` in `mac_daemon.py`
+- `peek_next()` skips `pending_approval` tasks so other tasks proceed
+- `_request_task_approval()` in `mac_daemon.py` — sends Telegram approval request using declared commands
 - `orch:approve_all:<project>:<id>` and `orch:deny:<project>:<id>` callbacks in `bot.py`
-- Trigger: per-project flag `require_approval: true` in `projects.yaml`
+
+**Task format:**
+```markdown
+### Task 3 — Install and configure Jest
+**Status:** PENDING
+**Requires approval:**
+- npm install --save-dev jest
+- npm test
+```
 
 ---
 

@@ -6,10 +6,43 @@ from pathlib import Path
 from typing import Optional
 
 
+def _parse_requires_approval(lines: list[str]) -> list[str]:
+    """
+    Extract commands from a **Requires approval:** section in a task's lines.
+    Returns list of command strings, or [] if section not present.
+
+    Example task format:
+        **Requires approval:**
+        - npm install --save-dev jest
+        - npm test
+    """
+    commands: list[str] = []
+    in_section = False
+    for line in lines:
+        if re.match(r"^\*\*Requires approval:\*\*", line.strip()):
+            in_section = True
+            continue
+        if in_section:
+            if line.strip().startswith("- "):
+                commands.append(line.strip()[2:].strip())
+            elif line.strip() and not line.strip().startswith("-"):
+                # Non-bullet, non-empty line ends the section
+                in_section = False
+    return commands
+
+
+def _flush_task(task: dict, lines: list[str]) -> None:
+    """Populate task description and requires_approval from collected lines."""
+    task["description"] = "\n".join(lines).strip()
+    approval_commands = _parse_requires_approval(lines)
+    if approval_commands:
+        task["requires_approval"] = approval_commands
+
+
 def get_pending_tasks(repo_path: str, tasks_file: str) -> list[dict]:
     """
     Return list of PENDING tasks from tasks_file, in document order.
-    Each task dict: {id, title, description, priority, file_ref}
+    Each task dict: {id, title, description, priority, requires_approval?}
     """
     path = Path(repo_path) / tasks_file
     if not path.exists():
@@ -20,7 +53,6 @@ def get_pending_tasks(repo_path: str, tasks_file: str) -> list[dict]:
     current_priority = ""
     task_id = 0
 
-    # Track current task block
     current_task: Optional[dict] = None
     current_lines: list[str] = []
 
@@ -29,7 +61,7 @@ def get_pending_tasks(repo_path: str, tasks_file: str) -> list[dict]:
         priority_match = re.match(r"^## (PRIORITY \d+|COMPLETED)", line)
         if priority_match:
             if current_task and current_lines:
-                current_task["description"] = "\n".join(current_lines).strip()
+                _flush_task(current_task, current_lines)
                 tasks.append(current_task)
             current_task = None
             current_lines = []
@@ -44,7 +76,7 @@ def get_pending_tasks(repo_path: str, tasks_file: str) -> list[dict]:
         task_match = re.match(r"^### (Task \d+(?:\.\d+)? — .+)", line)
         if task_match:
             if current_task and current_lines:
-                current_task["description"] = "\n".join(current_lines).strip()
+                _flush_task(current_task, current_lines)
                 tasks.append(current_task)
             task_id += 1
             current_task = {
@@ -72,7 +104,7 @@ def get_pending_tasks(repo_path: str, tasks_file: str) -> list[dict]:
 
     # Flush last task
     if current_task and current_lines:
-        current_task["description"] = "\n".join(current_lines).strip()
+        _flush_task(current_task, current_lines)
         tasks.append(current_task)
 
     return [t for t in tasks if t["status"] == "PENDING"]

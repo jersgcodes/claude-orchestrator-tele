@@ -32,7 +32,7 @@ from orchestrator.bot import (
 )
 from orchestrator.config import load as load_config, active_projects
 from orchestrator.limits import probe, detect_limit_type, parse_reset_time, is_limit_error, time_until
-from orchestrator.runner import run_task, commit_and_push, dry_run_analysis
+from orchestrator.runner import run_task, commit_and_push
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,29 +96,18 @@ async def _startup_notify(app: Application) -> None:
     )
 
 
-async def _request_task_approval(app: Application, task: dict, proj_cfg: dict) -> None:
-    """Run dry-run analysis and send a Telegram approval request for the task."""
-    q.set_task_pending_approval(task["project"], task["id"], [])  # mark pending immediately
-
-    commands = await asyncio.get_event_loop().run_in_executor(
-        None, dry_run_analysis, task, CLAUDE_PATH
-    )
+async def _request_task_approval(app: Application, task: dict) -> None:
+    """Send a Telegram approval request using commands declared in the task definition."""
+    commands = task["requires_approval"]
     q.set_task_pending_approval(task["project"], task["id"], commands)
 
     cfg = load_config()
     chat_id = cfg["telegram"]["admin_chat_id"]
-    title = task["title"]
-    label = f"[{task['project']}] {title}"
-
-    if not commands:
-        # No restricted commands predicted — auto-approve
-        q.approve_task(task["project"], task["id"], [])
-        await notify(app, f"✅ No restricted commands for _{label}_\nAuto-approved.")
-        return
-
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    label = f"[{task['project']}] {task['title']}"
     pid = task["project"]
     tid = task["id"]
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     cmd_list = "\n".join(f"  • `{c}`" for c in commands)
     keyboard = InlineKeyboardMarkup([
         [
@@ -131,7 +120,7 @@ async def _request_task_approval(app: Application, task: dict, proj_cfg: dict) -
             chat_id=chat_id,
             text=(
                 f"⚠️ *Permission request*\n_{label}_\n\n"
-                f"Predicted commands:\n{cmd_list}"
+                f"Commands requiring approval:\n{cmd_list}"
             ),
             parse_mode="Markdown",
             reply_markup=keyboard,
@@ -251,15 +240,15 @@ async def _tick(app: Application) -> None:
         return
 
     # ── Per-task approval gate ─────────────────────────────────────────────────
-    needs_approval = (
-        proj_cfg.get("require_approval")
-        and not proj_cfg.get("skip_permissions")
+    # Tasks declare required commands via "Requires approval:" in tasks.md.
+    # If declared and not yet approved, gate execution until user responds.
+    if (
+        task.get("requires_approval")
         and not task.get("approved_commands")
         and task.get("approval_status") != "pending"
-    )
-    if needs_approval:
+    ):
         logger.info("Requesting approval for task: %s / %s", task["project"], task["title"])
-        await _request_task_approval(app, task, proj_cfg)
+        await _request_task_approval(app, task)
         return
 
     logger.info("Running task: %s / %s", task["project"], task["title"])

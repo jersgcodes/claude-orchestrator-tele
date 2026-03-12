@@ -38,10 +38,8 @@ Entry point: `mac_daemon.py` → `main()` → `build_app()` + `execution_loop()`
 |------|---------|-------------|
 | `active` | `false` | Include project in queue/list operations |
 | `skip_permissions` | `false` | Add `--dangerously-skip-permissions` to claude CLI — for unattended overnight runs |
-| `require_approval` | `false` | Before running each task, run dry-run analysis and ask for Telegram approval of predicted bash commands. Not compatible with `skip_permissions`. |
 
-**When to set `skip_permissions: true`**: any project you trust to run autonomously overnight.
-**When to set `require_approval: true`**: projects where you want to review bash commands before each task runs. The daemon will pause the task, analyse predicted commands, send a Telegram message with Approve/Deny buttons, and only proceed once approved.
+**When to set `skip_permissions: true`**: any project you trust to run autonomously overnight. Claude will execute all bash commands without prompting.
 
 ## Telegram Bot Commands
 
@@ -164,16 +162,34 @@ Stop/Resume toggles based on current `paused` state.
 10. On success: `pop_next()`, commit+push, notify
 11. On error: `pop_next()`, notify with output excerpt
 
-## Per-Task Approval Flow (`require_approval: true`)
+## Per-Task Approval Flow
 
-1. `peek_next()` returns task (not yet pending)
-2. `_request_task_approval()` marks task `approval_status: "pending"`, runs `dry_run_analysis()`
-3. `dry_run_analysis()` calls `claude --print` with a prompt asking for predicted bash commands
-4. If no commands predicted: auto-approve, task proceeds next tick
-5. If commands predicted: send Telegram message with Approve all / Deny buttons
-6. User taps Approve → `approve_task()` sets `approved_commands`, clears `pending_approval`
+Tasks declare required bash commands directly in `tasks.md` using a `**Requires approval:**` section. No auto-analysis, no project flag — the task author fills in exactly what needs approval.
+
+### Task format with approval
+
+```markdown
+### Task 3 — Install and configure Jest
+**Status:** PENDING
+**Requires approval:**
+- npm install --save-dev jest @types/jest
+- npm test
+
+Install Jest for unit testing and add a basic test suite for the auth module.
+```
+
+### Execution flow
+
+1. `task_reader.py` parses `**Requires approval:**` bullets into `task["requires_approval"]`
+2. When queued, `requires_approval` is carried on the task dict in `queue.json`
+3. `peek_next()` returns the task (not yet pending)
+4. `_tick()` sees `requires_approval` is set, `approved_commands` not yet set → calls `_request_task_approval()`
+5. `_request_task_approval()` marks task `approval_status: "pending"` and sends Telegram message with Approve all / Deny buttons
+6. User taps Approve → `approve_task()` stores commands as `approved_commands`, clears `pending_approval`
 7. Next tick: `peek_next()` returns task (approved), `run_task()` uses `Bash(cmd)` allowlist
 8. User taps Deny → `deny_task()` removes task from queue
+
+Tasks without a `**Requires approval:**` section run immediately with no gate.
 
 ## Task File Format
 
