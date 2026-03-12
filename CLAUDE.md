@@ -37,9 +37,8 @@ Entry point: `mac_daemon.py` → `main()` → `build_app()` + `execution_loop()`
 | Flag | Default | Description |
 |------|---------|-------------|
 | `active` | `false` | Include project in queue/list operations |
-| `skip_permissions` | `false` | Add `--dangerously-skip-permissions` to claude CLI — for unattended overnight runs |
 
-**When to set `skip_permissions: true`**: any project you trust to run autonomously overnight. Claude will execute all bash commands without prompting.
+> **Note:** `--dangerously-skip-permissions` is intentionally not supported. Use the per-task `**Requires approval:**` section in `tasks.md` to pre-approve specific commands instead. Blanket permission bypass is not recommended.
 
 ## Telegram Bot Commands
 

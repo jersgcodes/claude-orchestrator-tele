@@ -45,10 +45,7 @@ def run_task(task: dict, proj_cfg: dict, claude_path: str = CLAUDE_PATH) -> tupl
         tools = "Edit,Write,Read,Glob,Grep," + ",".join(f"Bash({c})" for c in approved)
     else:
         tools = "Edit,Write,Read,Bash,Glob,Grep"
-    cmd = [claude_path, "--print", "--allowedTools", tools]
-    if proj_cfg.get("skip_permissions"):
-        cmd.append("--dangerously-skip-permissions")
-    cmd.append(prompt)
+    cmd = [claude_path, "--print", "--allowedTools", tools, prompt]
 
     try:
         result = subprocess.run(
