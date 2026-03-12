@@ -39,6 +39,13 @@ from orchestrator.config import load as load_config
 if TYPE_CHECKING:
     pass
 
+
+def _md_escape(text: str) -> str:
+    """Escape special chars in user-provided text for Telegram legacy Markdown."""
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
 logger = logging.getLogger(__name__)
 
 
@@ -128,7 +135,7 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     lines = [f"📋 *{project}* — PENDING tasks:\n"]
     for i, t in enumerate(tasks, 1):
-        lines.append(f"  `{i}` {t['title']}")
+        lines.append(f"  `{i}` {_md_escape(t['title'])}")
     lines.append(f"\nUse `/queue {project} 1 3 5` to queue by number.")
     await update.message.reply_text(
         "\n".join(lines),
@@ -222,7 +229,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         lines.append(f"📋 Queue ({len(tasks)} task{'s' if len(tasks) != 1 else ''}):")
         for i, t in enumerate(tasks[:10], 1):
-            lines.append(f"  {i}. [{t['project']}] {t['title']}")
+            lines.append(f"  {i}. [{t['project']}] {_md_escape(t['title'])}")
         if len(tasks) > 10:
             lines.append(f"  ... and {len(tasks) - 10} more")
 
@@ -247,7 +254,7 @@ async def cmd_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     task = q.skip_next()
     if task:
         await update.message.reply_text(
-            f"⏭ Skipped: _{task['title']}_\nMoved to end of queue.",
+            f"⏭ Skipped: _{_md_escape(task['title'])}_\nMoved to end of queue.",
             parse_mode="Markdown",
         )
     else:
@@ -315,7 +322,7 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     elif data == "orch:skip":
         task = q.skip_next()
-        msg = f"⏭ Skipped: _{task['title']}_" if task else "Queue is empty."
+        msg = f"⏭ Skipped: _{_md_escape(task['title'])}_" if task else "Queue is empty."
         await query.answer(msg, show_alert=True)
         await query.edit_message_reply_markup(_status_keyboard(q.is_paused(), q.is_empty()))
 
@@ -349,7 +356,7 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             return
         lines = [f"📋 *{project}* — PENDING tasks:\n"]
         for i, t in enumerate(tasks, 1):
-            lines.append(f"  `{i}` {t['title']}")
+            lines.append(f"  `{i}` {_md_escape(t['title'])}")
         await query.message.reply_text(
             "\n".join(lines),
             parse_mode="Markdown",

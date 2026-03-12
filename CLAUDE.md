@@ -30,6 +30,15 @@ Entry point: `mac_daemon.py` → `main()` → `build_app()` + `execution_loop()`
 - Env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `CLAUDE_PATH`
 - Config merges: base YAML → local YAML → env vars (env wins)
 
+### Per-project flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `active` | `false` | Include project in queue/list operations |
+| `skip_permissions` | `false` | Add `--dangerously-skip-permissions` to claude CLI — required for unattended overnight runs where bash commands would otherwise pause for approval |
+
+**When to set `skip_permissions: true`**: any project you trust to run autonomously overnight. Claude will execute bash commands (tests, installs, etc.) without prompting. Set `false` (or omit) for projects where you want to review destructive operations.
+
 ## Telegram Bot Commands
 
 | Command | Handler | Description |
@@ -63,7 +72,27 @@ All buttons use `callback_data` prefixed `orch:`. Handler: `on_button()` in `bot
 
 ## UI Design Specs
 
-### Main Menu (`/menu`, `orch:menu`)
+### Native Telegram Menu Button (hamburger ≡, bottom-left of chat input)
+
+**Recommended approach.** Set via `set_chat_menu_button(MenuButtonCommands())` in `_set_commands()`. Telegram renders a `≡` button natively — tapping it shows the full command list registered with `set_my_commands()`. No custom code needed beyond registration.
+
+Commands shown in the native menu (order matters — first = most prominent):
+```
+≡  menu    — open the main menu
+   list    — list <project> — show next 10 PENDING tasks
+   queue   — queue <project> next [n] — add tasks to queue
+   status  — queue contents + limit state
+   stop    — pause execution (queue preserved)
+   resume  — resume execution
+   skip    — move next queued task to end
+   clear   — wipe entire queue
+   help    — show all commands
+```
+
+### Inline Menu Message (`/menu`, `orch:menu`)
+
+A supplementary hub message with action buttons, shown on `/start`, `/menu`, or the `☰ Menu` button from other keyboards.
+
 ```
 ☰ Claude Orchestrator
 
@@ -75,7 +104,7 @@ All buttons use `callback_data` prefixed `orch:`. Handler: `on_button()` in `bot
 [ 🗑 Clear Queue ]                   ← only shown if queue not empty
 [ ❓ Help        ]
 ```
-Stop/Resume toggles based on current `paused` state. Opens on `/start` and `/menu`.
+Stop/Resume toggles based on current `paused` state.
 
 ### Status keyboard (`/status`, `orch:status`)
 ```

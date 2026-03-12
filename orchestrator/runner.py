@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 
 from orchestrator.limits import is_limit_error, CLAUDE_PATH
 
 logger = logging.getLogger(__name__)
+
+# launchd provides a minimal PATH; augment it so node/claude/git are found
+_EXTRA_PATH = "/opt/homebrew/bin:/usr/local/bin"
+_ENV = {**os.environ, "PATH": _EXTRA_PATH + ":" + os.environ.get("PATH", "")}
 
 
 def run_task(task: dict, proj_cfg: dict, claude_path: str = CLAUDE_PATH) -> tuple[bool, str, bool]:
@@ -26,24 +31,28 @@ def run_task(task: dict, proj_cfg: dict, claude_path: str = CLAUDE_PATH) -> tupl
     prompt = (
         f"{context}"
         f"Project: {task['project']}\n\n"
+        f"Before starting, run `git status` and `git diff` to check if work on this task was already "
+        f"partially done (e.g. the daemon was interrupted mid-run). If relevant uncommitted changes "
+        f"exist, continue from where work left off. Otherwise, start fresh.\n\n"
         f"Complete this task. Make all necessary code changes, run tests if available, "
         f"ensure nothing is broken. Summarise what you changed in 2-3 sentences at the end.\n\n"
         f"## Task\n{task['title']}\n\n"
         f"## Description\n{task.get('description', '')}"
     )
 
+    cmd = [claude_path, "--print", "--allowedTools", "Edit,Write,Read,Bash,Glob,Grep"]
+    if proj_cfg.get("skip_permissions"):
+        cmd.append("--dangerously-skip-permissions")
+    cmd.append(prompt)
+
     try:
         result = subprocess.run(
-            [
-                claude_path,
-                "--print",
-                "--allowedTools", "Edit,Write,Read,Bash,Glob,Grep",
-                prompt,
-            ],
+            cmd,
             cwd=repo_path,
             capture_output=True,
             text=True,
             timeout=600,
+            env=_ENV,
         )
         output = result.stdout + result.stderr
 
@@ -76,7 +85,7 @@ def commit_and_push(task: dict, proj_cfg: dict) -> bool:
         ["git", "push", "origin", branch],
     ]
     for cmd in cmds:
-        r = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True)
+        r = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True, env=_ENV)
         if r.returncode != 0 and "nothing to commit" not in (r.stdout + r.stderr):
             logger.error("git %s failed: %s", cmd[1], r.stderr[:200])
             return False

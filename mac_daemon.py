@@ -17,6 +17,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from telegram import MenuButtonCommands
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 import orchestrator.queue as q
@@ -180,6 +181,7 @@ async def _set_commands(app: Application) -> None:
         ("clear",  "wipe entire queue"),
         ("help",   "show all commands"),
     ])
+    await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 
 def build_app(bot_token: str) -> Application:
