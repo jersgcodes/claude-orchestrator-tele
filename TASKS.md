@@ -7,7 +7,7 @@ Tasks for improving the orchestrator itself. Not processed by the orchestrator.
 ## Monitoring System
 
 ### TASK: Add execution stats tracking
-**Status:** PENDING
+**Status:** DONE
 **Priority:** High
 
 Track per-task execution outcomes in a `stats.json` file (or append to queue.json):
@@ -15,10 +15,12 @@ Track per-task execution outcomes in a `stats.json` file (or append to queue.jso
 - Keep last N entries (e.g. 500) to avoid unbounded growth
 - Expose via `/stats` Telegram command: success rate, avg duration, error count, tasks today
 
+**Implemented:** `orchestrator/stats.py` — `record()`, `summary()`, `last_ran_at()`. `/stats` command in `bot.py`. Stats recorded in `_tick()` for all outcomes.
+
 ---
 
 ### TASK: Add daemon health monitoring via Telegram
-**Status:** PENDING
+**Status:** DONE
 **Priority:** High
 
 Detect and report when the daemon itself is unhealthy:
@@ -27,10 +29,12 @@ Detect and report when the daemon itself is unhealthy:
 - Alert if repeated task failures on the same task (stuck task detection)
 - Consider a `/health` command showing: uptime, tasks today, last task ran at, error rate
 
+**Implemented:** `_heartbeat_loop()` in `mac_daemon.py` (daily). Idle detection in `_tick()` (alerts once/hour if queue non-empty >10min with no task running). `/health` command in `bot.py`.
+
 ---
 
 ### TASK: Add `/stats` Telegram command
-**Status:** PENDING
+**Status:** DONE
 **Priority:** Medium
 
 Show a summary of recent execution history:
@@ -40,7 +44,8 @@ Show a summary of recent execution history:
 ⏱ Avg duration: 4m 12s
 Last task: 23 mins ago
 ```
-Requires stats tracking task above.
+
+**Implemented:** `cmd_stats()` in `bot.py`. Requires `orchestrator/stats.py`.
 
 ---
 
@@ -96,65 +101,41 @@ inspected or terminated cleanly.
 
 ---
 
----
-
 ### TASK: Per-task permission pre-approval via Telegram
-**Status:** PENDING
+**Status:** DONE
 **Priority:** High
 
 Allow users to pre-approve specific bash commands for a task before it runs, without granting blanket `--dangerously-skip-permissions`.
 
 **Workflow:**
 1. Task is written in `tasks.md` as normal (title + description)
-2. When user queues the task (`/queue` or button), the orchestrator runs a **dry-run analysis** step first — calls claude with a special prompt asking it to identify all bash commands it anticipates needing that would require permission (e.g. `npm install`, `pip install`, `rm -rf dist/`, `pytest`)
-3. Bot sends a Telegram message listing the predicted restricted commands with inline approve/deny buttons per command:
-   ```
-   ⚠️ Task requires permission for:
-   • npm install --save-dev jest
-   • rm -rf dist/
-   [ ✅ Approve all ] [ ❌ Deny & skip ]
-   Or approve individually:
-   [ ✅ npm install ] [ ✅ rm -rf dist ] [ ❌ rm -rf dist ]
-   ```
+2. When the task is next in queue, the orchestrator runs a **dry-run analysis** step — calls claude with a special prompt asking it to identify all bash commands it anticipates needing
+3. Bot sends a Telegram message listing the predicted restricted commands with Approve all / Deny buttons
 4. Approved commands are stored on the queued task as `approved_commands: [...]`
-5. When the task executes, runner passes approved commands to claude via `--allowedTools Bash(npm install),Bash(rm -rf dist/)` pattern (Claude Code supports per-command bash allowlisting)
+5. When the task executes, runner passes approved commands to claude via `--allowedTools Bash(cmd),...` pattern
 6. Task runs with only those specific bash commands pre-approved — no blanket skip
 
-**Implementation notes:**
-- Dry-run analysis prompt: `"List only the bash commands this task would require that need user permission. Be concise, exact commands only. Task: {title}\n{description}"`
-- Store `approved_commands` list in the task dict in queue.json
-- In runner.py: if `approved_commands` set and not `skip_permissions`, build `--allowedTools` string with `Bash(cmd)` entries instead of plain `Bash`
-- Timeout the approval request: if no response in 24h, task stays queued but unapproved (notify again when limit clears and task is next)
-- New queue state: `pending_approval` alongside existing `paused`
+**Implemented:**
+- `dry_run_analysis()` in `runner.py`
+- `set_task_pending_approval()`, `approve_task()`, `deny_task()`, `get_task()` in `queue.py`
+- `peek_next()` skips `pending_approval` tasks
+- `_request_task_approval()` in `mac_daemon.py`
+- `orch:approve_all:<project>:<id>` and `orch:deny:<project>:<id>` callbacks in `bot.py`
+- Trigger: per-project flag `require_approval: true` in `projects.yaml`
 
-**New bot callbacks needed:**
-- `orch:approve_all:<task_id>` — approve all predicted commands
-- `orch:approve_cmd:<task_id>:<cmd_idx>` — approve individual command
-- `orch:deny:<task_id>` — skip the task
+---
 
 ## Infrastructure
 
 ### TASK: Notify on daemon restart
-**Status:** PENDING
+**Status:** DONE
 **Priority:** High
 
 When the daemon starts (or restarts after a crash/reboot), send a Telegram message so the user knows:
-- Whether this is a fresh start or a launchd-triggered restart
 - Current queue depth and paused state
 - Any limit state that was persisted in queue.json
 
-Message format:
-```
-🔄 Orchestrator started
-Queue: 3 task(s) | Status: Running | Limits: OK
-```
-Or if restarting while a limit was active:
-```
-🔄 Orchestrator started
-Queue: 1 task(s) | Status: ⏸ Limit hit (DAILY) — resets in 2h 14m
-```
-
-**Implementation:** Add a startup notification call in `main()` in `mac_daemon.py`, after the bot is started and before `await asyncio.Event().wait()`. Reuse the existing `notify()` helper.
+**Implemented:** `_startup_notify()` in `mac_daemon.py`, called in `main()` after bot starts.
 
 ---
 

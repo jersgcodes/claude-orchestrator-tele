@@ -47,8 +47,53 @@ def add_tasks(tasks: list[dict]) -> int:
 
 
 def peek_next() -> Optional[dict]:
+    """Return first task that is not pending approval."""
     q = load()
-    return q["tasks"][0] if q["tasks"] else None
+    for task in q["tasks"]:
+        if task.get("approval_status") != "pending":
+            return task
+    return None
+
+
+def get_task(project: str, task_id: int) -> Optional[dict]:
+    """Return a task by project + id, or None."""
+    q = load()
+    for task in q["tasks"]:
+        if task["project"] == project and task["id"] == task_id:
+            return task
+    return None
+
+
+def set_task_pending_approval(project: str, task_id: int, predicted_commands: list) -> None:
+    """Mark a task as awaiting approval and store predicted commands."""
+    q = load()
+    for task in q["tasks"]:
+        if task["project"] == project and task["id"] == task_id:
+            task["approval_status"] = "pending"
+            task["predicted_commands"] = predicted_commands
+            break
+    save(q)
+
+
+def approve_task(project: str, task_id: int, approved_commands: list) -> None:
+    """Mark a task as approved with the given command list."""
+    q = load()
+    for task in q["tasks"]:
+        if task["project"] == project and task["id"] == task_id:
+            task["approval_status"] = "approved"
+            task["approved_commands"] = approved_commands
+            task.pop("predicted_commands", None)
+            break
+    save(q)
+
+
+def deny_task(project: str, task_id: int) -> bool:
+    """Remove a task from the queue. Returns True if found."""
+    q = load()
+    before = len(q["tasks"])
+    q["tasks"] = [t for t in q["tasks"] if not (t["project"] == project and t["id"] == task_id)]
+    save(q)
+    return len(q["tasks"]) < before
 
 
 def pop_next() -> Optional[dict]:

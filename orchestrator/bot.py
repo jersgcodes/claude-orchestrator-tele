@@ -7,6 +7,8 @@ Commands:
   /queue <project> 1 2 3    — add tasks by index to queue
   /queue <project> next [n] — add next n pending tasks (default 1)
   /status                   — queue contents + limit state
+  /stats                    — execution stats (last 24h)
+  /health                   — daemon health: uptime, last task, error rate
   /stop                     — pause execution
   /resume                   — resume execution
   /skip                     — skip the next queued task (move to end)
@@ -14,14 +16,16 @@ Commands:
   /help                     — show commands
 
 Inline button callbacks (orch: prefix):
-  orch:menu                 — show/refresh main menu
-  orch:stop / orch:resume   — toggle pause
-  orch:skip                 — skip next task
-  orch:clear                — clear queue
-  orch:list                 — show pending tasks (default project)
-  orch:status               — show status
-  orch:help                 — show help text
-  orch:qnext:<project>:<n>  — queue next n tasks for project
+  orch:menu                         — show/refresh main menu
+  orch:stop / orch:resume           — toggle pause
+  orch:skip                         — skip next task
+  orch:clear                        — clear queue
+  orch:list                         — show pending tasks (default project)
+  orch:status                       — show status
+  orch:help                         — show help text
+  orch:qnext:<project>:<n>          — queue next n tasks for project
+  orch:approve_all:<project>:<id>   — approve all predicted commands for task
+  orch:deny:<project>:<id>          — remove task from queue (deny approval)
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 import orchestrator.queue as q
+import orchestrator.stats as stats
 from orchestrator.limits import time_until
 from orchestrator.task_reader import get_next_tasks
 from orchestrator.config import load as load_config
@@ -286,6 +291,70 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show execution stats for the last 24h."""
+    from datetime import datetime, timezone
+    s = stats.summary(hours=24)
+    if s["total"] == 0:
+        await update.message.reply_text("No tasks recorded in the last 24h.")
+        return
+    avg = ""
+    if s["avg_duration"] is not None:
+        m, sec = divmod(s["avg_duration"], 60)
+        avg = f"\n*Avg duration:* {m}m {sec}s"
+    last = ""
+    if s["last_finished_at"]:
+        dt = datetime.fromisoformat(s["last_finished_at"])
+        secs = (datetime.now(timezone.utc) - dt).total_seconds()
+        if secs < 3600:
+            last = f"\n*Last task:* {round(secs / 60)}m ago"
+        else:
+            last = f"\n*Last task:* {round(secs / 3600)}h ago"
+    text = (
+        f"*Stats (last 24h)*\n\n"
+        f"✅ Done: {s['success']}   ❌ Failed: {s['error']}   ⏸ Limits: {s['limit']}"
+        f"{avg}{last}"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show daemon health summary."""
+    from datetime import datetime, timezone
+    from orchestrator.bot_state import start_time
+    now = datetime.now(timezone.utc)
+    uptime_secs = (now - start_time).total_seconds()
+    if uptime_secs < 3600:
+        uptime_str = f"{round(uptime_secs / 60)}m"
+    elif uptime_secs < 86400:
+        uptime_str = f"{round(uptime_secs / 3600)}h"
+    else:
+        uptime_str = f"{round(uptime_secs / 86400)}d"
+
+    s = stats.summary(hours=24)
+    error_rate = f"{round(s['error'] / s['total'] * 100)}%" if s["total"] else "n/a"
+
+    last = stats.last_ran_at()
+    if last:
+        secs = (now - last).total_seconds()
+        last_str = f"{round(secs / 60)}m ago" if secs < 3600 else f"{round(secs / 3600)}h ago"
+    else:
+        last_str = "never"
+
+    queue_count = len(q.all_tasks())
+    lim_state = "🔴 Limit hit" if q.is_limit_hit() else "🟢 OK"
+    text = (
+        f"*Daemon Health*\n\n"
+        f"*Uptime:* {uptime_str}\n"
+        f"*Limits:* {lim_state}\n"
+        f"*Tasks today:* {s['total']} (errors: {s['error']})\n"
+        f"*Error rate (24h):* {error_rate}\n"
+        f"*Last task:* {last_str}\n"
+        f"*Queue:* {queue_count} pending"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "*Claude Orchestrator Commands*\n\n"
@@ -293,6 +362,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "`/queue <project> 1 2 3` — queue by index\n"
         "`/queue <project> next [n]` — queue next n tasks\n"
         "`/status` — queue + limit state\n"
+        "`/stats` — execution stats (last 24h)\n"
+        "`/health` — daemon health\n"
         "`/stop` — pause execution\n"
         "`/resume` — resume execution\n"
         "`/skip` — skip next task (move to end)\n"
@@ -409,6 +480,8 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "`/queue <project> 1 2 3` — queue by index\n"
             "`/queue <project> next [n]` — queue next n tasks\n"
             "`/status` — queue + limit state\n"
+            "`/stats` — execution stats (last 24h)\n"
+            "`/health` — daemon health\n"
             "`/stop` — pause execution\n"
             "`/resume` — resume execution\n"
             "`/skip` — skip next task (move to end)\n"
@@ -417,3 +490,30 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "`/help` — this message"
         )
         await query.message.reply_text(text, parse_mode="Markdown")
+
+    elif data.startswith("orch:approve_all:"):
+        _, _, project, task_id_str = data.split(":", 3)
+        task_id = int(task_id_str)
+        task = q.get_task(project, task_id)
+        if not task:
+            await query.answer("Task not found — may have been removed.", show_alert=True)
+            return
+        commands = task.get("predicted_commands", [])
+        q.approve_task(project, task_id, commands)
+        title = _md_escape(task["title"])
+        cmd_list = ", ".join(f"`{c}`" for c in commands) if commands else "none"
+        await query.edit_message_text(
+            f"✅ *Approved* — [{project}] _{title}_\nCommands: {cmd_list}",
+            parse_mode="Markdown",
+        )
+
+    elif data.startswith("orch:deny:"):
+        _, _, project, task_id_str = data.split(":", 3)
+        task_id = int(task_id_str)
+        task = q.get_task(project, task_id)
+        title = _md_escape(task["title"]) if task else "unknown"
+        q.deny_task(project, task_id)
+        await query.edit_message_text(
+            f"❌ *Denied* — [{project}] _{title}_\nTask removed from queue.",
+            parse_mode="Markdown",
+        )

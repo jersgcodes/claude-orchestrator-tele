@@ -2,8 +2,9 @@
 Claude Orchestrator — Mac daemon entry point.
 
 Runs two concurrent loops:
-  1. Telegram bot  — receives /queue /status /stop /resume /skip /clear commands
+  1. Telegram bot  — receives /queue /status /stop /resume /skip /clear /stats /health commands
   2. Execution loop — works through the task queue, detects and waits out limits
+  3. Heartbeat loop — sends a daily status summary via Telegram
 
 Start:   python mac_daemon.py
 Install: python install.py   (registers as macOS launchd service, auto-starts on boot)
@@ -16,19 +17,22 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from telegram import MenuButtonCommands
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 import orchestrator.queue as q
+import orchestrator.stats as stats
+import orchestrator.bot_state as bot_state
 from orchestrator.bot import (
-    cmd_clear, cmd_help, cmd_list, cmd_menu, cmd_queue,
-    cmd_resume, cmd_skip, cmd_status, cmd_stop,
+    cmd_clear, cmd_health, cmd_help, cmd_list, cmd_menu, cmd_queue,
+    cmd_resume, cmd_skip, cmd_stats, cmd_status, cmd_stop,
     on_button,
 )
 from orchestrator.config import load as load_config, active_projects
 from orchestrator.limits import probe, detect_limit_type, parse_reset_time, is_limit_error, time_until
-from orchestrator.runner import run_task, commit_and_push
+from orchestrator.runner import run_task, commit_and_push, dry_run_analysis
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +47,24 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_SECONDS = 60        # check queue every 60s when no limit hit
 LIMIT_POLL_SECONDS    = 15 * 60   # check every 15 min when limit is hit
 LIMIT_PROBE_START_H   = 4.5       # start probing after 4.5 hours
+HEARTBEAT_INTERVAL    = 24 * 3600 # daily heartbeat
+IDLE_ALERT_MINS       = 10        # alert if queue non-empty but nothing ran for this long
 CLAUDE_PATH           = os.getenv("CLAUDE_PATH", "/opt/homebrew/bin/claude")
+
+_last_idle_alert: Optional[datetime] = None
+
+
+def _time_ago(dt: Optional[datetime]) -> str:
+    if dt is None:
+        return "never"
+    secs = (datetime.now(timezone.utc) - dt).total_seconds()
+    if secs < 60:
+        return f"{round(secs)}s"
+    elif secs < 3600:
+        return f"{round(secs / 60)}m"
+    elif secs < 86400:
+        return f"{round(secs / 3600)}h"
+    return f"{round(secs / 86400)}d"
 
 
 async def notify(app: Application, text: str) -> None:
@@ -53,6 +74,89 @@ async def notify(app: Application, text: str) -> None:
         await app.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
     except Exception as e:
         logger.error("Telegram notify failed: %s", e)
+
+
+async def _startup_notify(app: Application) -> None:
+    tasks = q.all_tasks()
+    lim = q.get_limit()
+    paused = q.is_paused()
+
+    lim_state = "🟢 Limits OK"
+    if q.is_limit_hit():
+        reset = datetime.fromisoformat(lim["reset_at"])
+        remaining = time_until(reset)
+        ltype = lim.get("type", "").upper()
+        lim_state = f"⏸ Limit hit ({ltype}) — resets in {remaining}"
+
+    status = "⏸ Paused" if paused else "▶️ Running"
+    await notify(
+        app,
+        f"🔄 *Orchestrator started*\n"
+        f"Queue: {len(tasks)} task(s) | {status} | {lim_state}",
+    )
+
+
+async def _request_task_approval(app: Application, task: dict, proj_cfg: dict) -> None:
+    """Run dry-run analysis and send a Telegram approval request for the task."""
+    q.set_task_pending_approval(task["project"], task["id"], [])  # mark pending immediately
+
+    commands = await asyncio.get_event_loop().run_in_executor(
+        None, dry_run_analysis, task, CLAUDE_PATH
+    )
+    q.set_task_pending_approval(task["project"], task["id"], commands)
+
+    cfg = load_config()
+    chat_id = cfg["telegram"]["admin_chat_id"]
+    title = task["title"]
+    label = f"[{task['project']}] {title}"
+
+    if not commands:
+        # No restricted commands predicted — auto-approve
+        q.approve_task(task["project"], task["id"], [])
+        await notify(app, f"✅ No restricted commands for _{label}_\nAuto-approved.")
+        return
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    pid = task["project"]
+    tid = task["id"]
+    cmd_list = "\n".join(f"  • `{c}`" for c in commands)
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Approve all", callback_data=f"orch:approve_all:{pid}:{tid}"),
+            InlineKeyboardButton("❌ Deny", callback_data=f"orch:deny:{pid}:{tid}"),
+        ],
+    ])
+    try:
+        await app.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"⚠️ *Permission request*\n_{label}_\n\n"
+                f"Predicted commands:\n{cmd_list}"
+            ),
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
+    except Exception as e:
+        logger.error("Failed to send approval request: %s", e)
+
+
+async def _heartbeat_loop(app: Application) -> None:
+    """Send a daily status summary."""
+    while True:
+        await asyncio.sleep(HEARTBEAT_INTERVAL)
+        try:
+            s = stats.summary(hours=24)
+            last = stats.last_ran_at()
+            queue_count = len(q.all_tasks())
+            await notify(
+                app,
+                f"🟢 *Orchestrator alive*\n\n"
+                f"Tasks (24h): ✅ {s['success']}  ❌ {s['error']}  ⏸ {s['limit']}\n"
+                f"Queue: {queue_count} pending\n"
+                f"Last task: {_time_ago(last)} ago",
+            )
+        except Exception as e:
+            logger.error("Heartbeat failed: %s", e)
 
 
 async def execution_loop(app: Application) -> None:
@@ -69,6 +173,8 @@ async def execution_loop(app: Application) -> None:
 
 
 async def _tick(app: Application) -> None:
+    global _last_idle_alert
+
     if q.is_paused():
         return
 
@@ -79,7 +185,6 @@ async def _tick(app: Application) -> None:
         elapsed_h = (datetime.now(timezone.utc) - hit_at).total_seconds() / 3600
 
         if elapsed_h < LIMIT_PROBE_START_H:
-            # Too early to probe — sleep longer
             logger.info(
                 "Limit hit %s ago. Not probing until %.1fh mark.",
                 time_until(datetime.now(timezone.utc) - (datetime.now(timezone.utc) - hit_at)),
@@ -98,18 +203,38 @@ async def _tick(app: Application) -> None:
             await asyncio.sleep(LIMIT_POLL_SECONDS - POLL_INTERVAL_SECONDS)
             return
 
-        # Limits cleared!
         limit_type = lim.get("type", "unknown")
         q.clear_limit()
         logger.info("Limits reset (%s). Resuming queue.", limit_type)
         await notify(app, f"🟢 *Limits reset* ({limit_type.upper()})\nResuming queue...")
         return  # next tick will pick up the task
 
+    # ── Idle detection ────────────────────────────────────────────────────────
+    if not q.is_empty():
+        last = stats.last_ran_at()
+        if last:
+            idle_mins = (datetime.now(timezone.utc) - last).total_seconds() / 60
+            already_alerted = (
+                _last_idle_alert is not None
+                and (datetime.now(timezone.utc) - _last_idle_alert).total_seconds() < 3600
+            )
+            if idle_mins > IDLE_ALERT_MINS and not already_alerted:
+                _last_idle_alert = datetime.now(timezone.utc)
+                queue_count = len(q.all_tasks())
+                await notify(
+                    app,
+                    f"⚠️ *Idle alert* — queue has {queue_count} task(s) but nothing ran for "
+                    f"{round(idle_mins)}m",
+                )
+
     # ── Task execution ────────────────────────────────────────────────────────
     if q.is_empty():
         return
 
     task = q.peek_next()
+    if task is None:
+        return  # all queued tasks are pending approval
+
     cfg = load_config()
     projects = active_projects(cfg)
     proj_cfg = projects.get(task["project"])
@@ -125,18 +250,33 @@ async def _tick(app: Application) -> None:
         q.pop_next()
         return
 
+    # ── Per-task approval gate ─────────────────────────────────────────────────
+    needs_approval = (
+        proj_cfg.get("require_approval")
+        and not proj_cfg.get("skip_permissions")
+        and not task.get("approved_commands")
+        and task.get("approval_status") != "pending"
+    )
+    if needs_approval:
+        logger.info("Requesting approval for task: %s / %s", task["project"], task["title"])
+        await _request_task_approval(app, task, proj_cfg)
+        return
+
     logger.info("Running task: %s / %s", task["project"], task["title"])
     await notify(app, f"⚙️ *Starting task*\n[{task['project']}] {task['title']}")
 
+    started_at = datetime.now(timezone.utc)
     success, output, was_limit = await asyncio.get_event_loop().run_in_executor(
         None, run_task, task, proj_cfg, CLAUDE_PATH
     )
+    finished_at = datetime.now(timezone.utc)
 
     if was_limit:
         limit_type = detect_limit_type(output)
         reset_at = parse_reset_time(output)
         q.set_limit_hit(limit_type, reset_at)
         remaining = time_until(reset_at)
+        stats.record(task, "limit", started_at, finished_at)
         await notify(
             app,
             f"⏸ *Limit hit* ({limit_type.upper()})\n"
@@ -152,6 +292,7 @@ async def _tick(app: Application) -> None:
         committed = await asyncio.get_event_loop().run_in_executor(
             None, commit_and_push, task, proj_cfg
         )
+        stats.record(task, "success", started_at, finished_at)
         summary = output[:400] if output else "No output."
         await notify(
             app,
@@ -162,6 +303,7 @@ async def _tick(app: Application) -> None:
         logger.info("Task complete: %s", task["title"])
     else:
         q.pop_next()
+        stats.record(task, "error", started_at, finished_at)
         await notify(
             app,
             f"❌ *Error* — [{task['project']}] {task['title']}\n\n```\n{output[:400]}\n```",
@@ -175,6 +317,8 @@ async def _set_commands(app: Application) -> None:
         ("list",   "list <project> — show next 10 PENDING tasks"),
         ("queue",  "queue <project> next [n] — add tasks to queue"),
         ("status", "queue contents + limit state"),
+        ("stats",  "execution stats for the last 24h"),
+        ("health", "daemon health: uptime, last task, error rate"),
         ("stop",   "pause execution (queue preserved)"),
         ("resume", "resume execution"),
         ("skip",   "move next queued task to end"),
@@ -190,6 +334,8 @@ def build_app(bot_token: str) -> Application:
     app.add_handler(CommandHandler("list",   cmd_list))
     app.add_handler(CommandHandler("queue",  cmd_queue))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("stats",  cmd_stats))
+    app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("stop",   cmd_stop))
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("skip",   cmd_skip))
@@ -208,19 +354,22 @@ async def main() -> None:
 
     app = build_app(bot_token)
 
-    # Start execution loop as a background task alongside the Telegram bot
     async with app:
         await app.start()
-        task = asyncio.create_task(execution_loop(app))
-        logger.info("Claude Orchestrator running. Send /help to your Telegram bot.")
         await app.updater.start_polling(drop_pending_updates=True)
+        await _startup_notify(app)
+
+        exec_task = asyncio.create_task(execution_loop(app))
+        heartbeat_task = asyncio.create_task(_heartbeat_loop(app))
+        logger.info("Claude Orchestrator running. Send /help to your Telegram bot.")
 
         try:
             await asyncio.Event().wait()  # run forever
         except (KeyboardInterrupt, SystemExit):
             pass
         finally:
-            task.cancel()
+            exec_task.cancel()
+            heartbeat_task.cancel()
             await app.updater.stop()
             await app.stop()
 

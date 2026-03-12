@@ -40,7 +40,12 @@ def run_task(task: dict, proj_cfg: dict, claude_path: str = CLAUDE_PATH) -> tupl
         f"## Description\n{task.get('description', '')}"
     )
 
-    cmd = [claude_path, "--print", "--allowedTools", "Edit,Write,Read,Bash,Glob,Grep"]
+    approved = task.get("approved_commands")
+    if approved:
+        tools = "Edit,Write,Read,Glob,Grep," + ",".join(f"Bash({c})" for c in approved)
+    else:
+        tools = "Edit,Write,Read,Bash,Glob,Grep"
+    cmd = [claude_path, "--print", "--allowedTools", tools]
     if proj_cfg.get("skip_permissions"):
         cmd.append("--dangerously-skip-permissions")
     cmd.append(prompt)
@@ -66,6 +71,34 @@ def run_task(task: dict, proj_cfg: dict, claude_path: str = CLAUDE_PATH) -> tupl
         return False, "Task timed out after 10 minutes.", False
     except FileNotFoundError:
         return False, f"claude CLI not found at {claude_path}", False
+
+
+def dry_run_analysis(task: dict, claude_path: str = CLAUDE_PATH) -> list[str]:
+    """
+    Call claude to predict bash commands the task would need permission for.
+    Returns a list of command strings (may be empty).
+    """
+    prompt = (
+        "List only the bash commands this task would require that need user permission "
+        "(e.g. package installs, file deletions, test runners, build commands). "
+        "Output one command per line, exact commands only, no explanations, no other text. "
+        "If no restricted commands are needed, output nothing.\n\n"
+        f"Task: {task['title']}\n{task.get('description', '')}"
+    )
+    try:
+        result = subprocess.run(
+            [claude_path, "--print", prompt],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=_ENV,
+        )
+        output = result.stdout.strip()
+        if not output or result.returncode != 0:
+            return []
+        return [line.strip() for line in output.splitlines() if line.strip()][:20]
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
 
 
 def commit_and_push(task: dict, proj_cfg: dict) -> bool:

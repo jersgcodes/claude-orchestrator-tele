@@ -4,24 +4,26 @@ A macOS daemon that automates coding task queues, controlled entirely via Telegr
 
 ## Architecture
 
-Two concurrent async loops run side-by-side:
+Three concurrent async loops run side-by-side:
 1. **Telegram bot** — receives commands, sends notifications
 2. **Execution loop** — polls queue every 60s, runs tasks via `claude` CLI
+3. **Heartbeat loop** — sends a daily status summary
 
-Entry point: `mac_daemon.py` → `main()` → `build_app()` + `execution_loop()`
+Entry point: `mac_daemon.py` → `main()` → `build_app()` + `execution_loop()` + `_heartbeat_loop()`
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `mac_daemon.py` | Entry point, execution loop, `build_app()`, `_tick()`, `notify()` |
+| `mac_daemon.py` | Entry point, execution loop, `_tick()`, `notify()`, `_startup_notify()`, `_heartbeat_loop()`, `_request_task_approval()` |
 | `orchestrator/bot.py` | All Telegram command handlers and inline button callbacks |
-| `orchestrator/queue.py` | Queue persistence (`queue.json`): tasks, paused state, limit tracking |
+| `orchestrator/queue.py` | Queue persistence (`queue.json`): tasks, paused state, limit tracking, approval state |
+| `orchestrator/stats.py` | Execution stats persistence (`stats.json`): `record()`, `summary()`, `last_ran_at()` |
+| `orchestrator/bot_state.py` | Shared daemon state: `start_time` (used by `/health`) |
 | `orchestrator/config.py` | Load/merge `projects.yaml` + `projects.local.yaml` + env vars |
-| `orchestrator/runner.py` | Run `claude` CLI, `commit_and_push()` |
+| `orchestrator/runner.py` | Run `claude` CLI, `commit_and_push()`, `dry_run_analysis()` |
 | `orchestrator/limits.py` | Detect 5-hour/weekly limits, parse reset times, `probe()` |
 | `orchestrator/task_reader.py` | Parse `tasks.md`, extract PENDING tasks |
-| `orchestrator/state.py` | Legacy state file (minimal use) |
 
 ## Configuration
 
@@ -35,9 +37,11 @@ Entry point: `mac_daemon.py` → `main()` → `build_app()` + `execution_loop()`
 | Flag | Default | Description |
 |------|---------|-------------|
 | `active` | `false` | Include project in queue/list operations |
-| `skip_permissions` | `false` | Add `--dangerously-skip-permissions` to claude CLI — required for unattended overnight runs where bash commands would otherwise pause for approval |
+| `skip_permissions` | `false` | Add `--dangerously-skip-permissions` to claude CLI — for unattended overnight runs |
+| `require_approval` | `false` | Before running each task, run dry-run analysis and ask for Telegram approval of predicted bash commands. Not compatible with `skip_permissions`. |
 
-**When to set `skip_permissions: true`**: any project you trust to run autonomously overnight. Claude will execute bash commands (tests, installs, etc.) without prompting. Set `false` (or omit) for projects where you want to review destructive operations.
+**When to set `skip_permissions: true`**: any project you trust to run autonomously overnight.
+**When to set `require_approval: true`**: projects where you want to review bash commands before each task runs. The daemon will pause the task, analyse predicted commands, send a Telegram message with Approve/Deny buttons, and only proceed once approved.
 
 ## Telegram Bot Commands
 
@@ -48,6 +52,8 @@ Entry point: `mac_daemon.py` → `main()` → `build_app()` + `execution_loop()`
 | `/queue <project> 1 2 3` | `cmd_queue` | Queue tasks by index |
 | `/queue <project> next [n]` | `cmd_queue` | Queue next n tasks |
 | `/status` | `cmd_status` | Queue contents + limit state |
+| `/stats` | `cmd_stats` | Execution stats (last 24h): done/failed/limits, avg duration, last task |
+| `/health` | `cmd_health` | Daemon health: uptime, error rate, last task, queue depth |
 | `/stop` | `cmd_stop` | Pause execution |
 | `/resume` | `cmd_resume` | Resume execution |
 | `/skip` | `cmd_skip` | Move next task to end of queue |
@@ -69,12 +75,14 @@ All buttons use `callback_data` prefixed `orch:`. Handler: `on_button()` in `bot
 | `orch:status` | Show status |
 | `orch:help` | Show help text |
 | `orch:qnext:<project>:<n>` | Queue next n tasks for project |
+| `orch:approve_all:<project>:<id>` | Approve all predicted commands for task |
+| `orch:deny:<project>:<id>` | Remove task from queue (deny approval) |
 
 ## UI Design Specs
 
 ### Native Telegram Menu Button (hamburger ≡, bottom-left of chat input)
 
-**Recommended approach.** Set via `set_chat_menu_button(MenuButtonCommands())` in `_set_commands()`. Telegram renders a `≡` button natively — tapping it shows the full command list registered with `set_my_commands()`. No custom code needed beyond registration.
+**Recommended approach.** Set via `set_chat_menu_button(MenuButtonCommands())` in `_set_commands()`. Telegram renders a `≡` button natively — tapping it shows the full command list registered with `set_my_commands()`.
 
 Commands shown in the native menu (order matters — first = most prominent):
 ```
@@ -82,6 +90,8 @@ Commands shown in the native menu (order matters — first = most prominent):
    list    — list <project> — show next 10 PENDING tasks
    queue   — queue <project> next [n] — add tasks to queue
    status  — queue contents + limit state
+   stats   — execution stats for the last 24h
+   health  — daemon health: uptime, last task, error rate
    stop    — pause execution (queue preserved)
    resume  — resume execution
    skip    — move next queued task to end
@@ -129,21 +139,41 @@ Stop/Resume toggles based on current `paused` state.
 
 | Event | Format |
 |-------|--------|
+| Daemon started | `🔄 *Orchestrator started*\nQueue: N task(s) \| Status \| Limits` |
 | Task starting | `⚙️ *Starting task*\n[project] title` |
 | Task done | `✅ *Done* — [project] title\n\n<output[:400]>\n_Changes committed and pushed._` |
 | Limit hit | `⏸ *Limit hit* (5HOUR)\n[project] title\n\nReset in approx. *Xh Ym*` |
 | Limit reset | `🟢 *Limits reset* (5HOUR)\nResuming queue...` |
 | Error | `❌ *Error* — [project] title\n\n\`\`\`<output[:400]>\`\`\`` |
-| Bad repo path | `❌ Repo path not found for *project*: \`/path\`` |
+| Idle alert | `⚠️ *Idle alert* — queue has N task(s) but nothing ran for Xm` |
+| Heartbeat (daily) | `🟢 *Orchestrator alive*\nTasks (24h): ✅ N ❌ N ⏸ N\nQueue: N pending\nLast task: Xm ago` |
+| Approval request | `⚠️ *Permission request*\n_[project] title_\n\nPredicted commands:\n  • cmd` |
+| Auto-approved | `✅ No restricted commands for _title_\nAuto-approved.` |
 
 ## Task Execution Flow
 
 1. `_tick()` runs every 60s
-2. If limit hit: wait 4.5h then probe; notify on recovery
-3. If not paused and queue not empty: `peek_next()` → `run_task()` → `commit_and_push()`
-4. On limit: `set_limit_hit()`, task stays in queue
-5. On success: `pop_next()`, commit+push, notify
-6. On error: `pop_next()`, notify with output excerpt
+2. If paused: return
+3. If limit hit: wait 4.5h then probe; notify on recovery
+4. Idle detection: if queue non-empty and last task >10min ago, alert (once/hour)
+5. `peek_next()` — returns first task not in `pending_approval` state
+6. If `require_approval` and no `approved_commands`: run `_request_task_approval()`, return
+7. `run_task()` → `commit_and_push()`
+8. Record outcome in `stats.json`
+9. On limit: `set_limit_hit()`, task stays in queue
+10. On success: `pop_next()`, commit+push, notify
+11. On error: `pop_next()`, notify with output excerpt
+
+## Per-Task Approval Flow (`require_approval: true`)
+
+1. `peek_next()` returns task (not yet pending)
+2. `_request_task_approval()` marks task `approval_status: "pending"`, runs `dry_run_analysis()`
+3. `dry_run_analysis()` calls `claude --print` with a prompt asking for predicted bash commands
+4. If no commands predicted: auto-approve, task proceeds next tick
+5. If commands predicted: send Telegram message with Approve all / Deny buttons
+6. User taps Approve → `approve_task()` sets `approved_commands`, clears `pending_approval`
+7. Next tick: `peek_next()` returns task (approved), `run_task()` uses `Bash(cmd)` allowlist
+8. User taps Deny → `deny_task()` removes task from queue
 
 ## Task File Format
 
@@ -153,10 +183,24 @@ Tasks live in each project's `tasks_file` (e.g., `docs/tasks.md`). Parser looks 
 
 ```json
 {
-  "tasks": [{"project": "...", "id": "...", "title": "...", "queued_at": "..."}],
+  "tasks": [
+    {
+      "project": "...", "id": 1, "title": "...", "queued_at": "...",
+      "approval_status": "pending|approved",   // only if require_approval
+      "predicted_commands": ["npm install"],    // set during analysis
+      "approved_commands": ["npm install"]      // set after user approves
+    }
+  ],
   "paused": false,
   "limit": {"type": null, "hit_at": null, "reset_at": null}
 }
+```
+
+## Stats (stats.json)
+
+Rolling log of last 500 task outcomes. Each entry:
+```json
+{"title": "...", "project": "...", "started_at": "...", "finished_at": "...", "duration_seconds": 142, "outcome": "success|error|limit"}
 ```
 
 ## Limit Handling
@@ -173,3 +217,4 @@ Tasks live in each project's `tasks_file` (e.g., `docs/tasks.md`). Parser looks 
 - Logs: `orchestrator.log` (stdout), `orchestrator-error.log` (stderr)
 - Auto-starts on login, auto-restarts on crash
 - Claude CLI path: `/opt/homebrew/bin/claude` (override via `CLAUDE_PATH`)
+- On each start: sends a startup notification via Telegram with current queue/limit state
