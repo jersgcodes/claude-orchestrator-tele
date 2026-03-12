@@ -125,11 +125,11 @@ Allow users to pre-approve specific bash commands for a task before it runs, wit
 
 **Task format:**
 ```markdown
-### Task 3 — Install and configure Jest
+### Task 3 — Add pytest and write tests for auth module
 **Status:** PENDING
 **Requires approval:**
-- npm install --save-dev jest
-- npm test
+- pip install pytest
+- pytest
 ```
 
 ---

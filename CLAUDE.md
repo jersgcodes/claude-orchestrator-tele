@@ -168,13 +168,13 @@ Tasks declare required bash commands directly in `tasks.md` using a `**Requires 
 ### Task format with approval
 
 ```markdown
-### Task 3 — Install and configure Jest
+### Task 3 — Add pytest and write tests for auth module
 **Status:** PENDING
 **Requires approval:**
-- npm install --save-dev jest @types/jest
-- npm test
+- pip install pytest
+- pytest
 
-Install Jest for unit testing and add a basic test suite for the auth module.
+Add a pytest test suite for the auth module.
 ```
 
 ### Execution flow
