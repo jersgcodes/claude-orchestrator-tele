@@ -33,6 +33,7 @@ from orchestrator.bot import (
 from orchestrator.config import load as load_config, active_projects
 from orchestrator.limits import probe, detect_limit_type, parse_reset_time, is_limit_error, time_until
 from orchestrator.runner import run_task, commit_and_push
+from orchestrator.queue import requeue_at_front
 
 logging.basicConfig(
     level=logging.INFO,
@@ -291,13 +292,29 @@ async def _tick(app: Application) -> None:
         )
         logger.info("Task complete: %s", task["title"])
     else:
-        q.pop_next()
-        stats.record(task, "error", started_at, finished_at)
-        await notify(
-            app,
-            f"❌ *Error* — [{task['project']}] {task['title']}\n\n```\n{output[:400]}\n```",
-        )
-        logger.error("Task failed: %s\n%s", task["title"], output[:400])
+        max_retries = proj_cfg.get("max_retries", 0)
+        retries_used = task.get("retries_used", 0)
+
+        if retries_used < max_retries:
+            task_to_retry = q.pop_next()
+            task_to_retry["retries_used"] = retries_used + 1
+            requeue_at_front(task_to_retry)
+            stats.record(task, "error", started_at, finished_at)
+            await notify(
+                app,
+                f"⚠️ *Task failed — retrying* ({retries_used + 1}/{max_retries})\n"
+                f"[{task['project']}] {task['title']}\n\n```\n{output[:300]}\n```",
+            )
+            logger.warning("Task failed, retry %d/%d: %s", retries_used + 1, max_retries, task["title"])
+        else:
+            q.pop_next()
+            stats.record(task, "error", started_at, finished_at)
+            retry_note = f" (failed after {max_retries} retr{'y' if max_retries == 1 else 'ies'})" if max_retries > 0 else ""
+            await notify(
+                app,
+                f"❌ *Error{retry_note}* — [{task['project']}] {task['title']}\n\n```\n{output[:400]}\n```",
+            )
+            logger.error("Task failed: %s\n%s", task["title"], output[:400])
 
 
 async def _set_commands(app: Application) -> None:

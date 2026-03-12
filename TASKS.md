@@ -49,13 +49,33 @@ Last task: 23 mins ago
 
 ---
 
+### TASK: Smarter resume detection on task start
+**Status:** DONE
+**Priority:** Medium
+
+Before running a task, do a Python-side `git status --porcelain` check rather than asking Claude to do it.
+
+**Implemented:** `_has_uncommitted_changes()` in `runner.py`. If uncommitted changes exist, a stronger "you were interrupted — review and continue" prompt is used. If repo is clean, a lightweight "start fresh" prompt is used.
+
+---
+
 ### TASK: Add task retry on failure
+**Status:** DONE
+**Priority:** Medium
+
+Add `max_retries` per-project config (default 0). On failure, if retries remaining, re-queue the task at the front with an incremented `retries_used` counter. Notify on each retry attempt and on final failure.
+
+**Implemented:** `requeue_at_front()` in `queue.py`. Retry logic in `_tick()` in `mac_daemon.py`. Configure via `max_retries: 2` in `projects.yaml` per project.
+
+---
+
+### TASK: Add `/logs` command to tail recent log output
 **Status:** PENDING
 **Priority:** Medium
 
-Currently failed tasks are dropped. Add a `max_retries` per-project config (default 0).
-On failure, if retries remaining, re-queue the task at the front with a decremented retry counter.
-Notify on final failure after all retries exhausted.
+Send last 20 lines of orchestrator.log as a Telegram message (inside a code block).
+Useful for debugging without SSH-ing into the machine.
+Cap at 4000 chars (Telegram message limit).
 
 ---
 
@@ -65,39 +85,6 @@ Notify on final failure after all retries exhausted.
 
 orchestrator.log grows unbounded. Switch `logging.basicConfig` to `RotatingFileHandler`
 (e.g. 5MB max, keep 3 backups). Prevents disk issues on long-running deployments.
-
----
-
-### TASK: Add `/logs` command to tail recent log output
-**Status:** PENDING
-**Priority:** Low
-
-Send last 20 lines of orchestrator.log as a Telegram message (inside a code block).
-Useful for debugging without SSH-ing into the machine.
-Cap at 4000 chars (Telegram message limit).
-
----
-
-### TASK: Smarter resume detection on task start
-**Status:** PENDING
-**Priority:** Medium
-
-Currently the prompt always asks Claude to check `git status` before starting (basic "continue" behaviour). A smarter version:
-- Before running the task, do a quick `git status --porcelain` check in the runner itself (not via claude)
-- If there are uncommitted changes, prepend a stronger "you were interrupted — review and continue" prompt
-- If the repo is clean, use the normal "start fresh" prompt
-- Optionally: store a `started_at` timestamp on the task in queue.json so we know how long it's been interrupted
-
----
-
-### TASK: Graceful shutdown on task in progress
-**Status:** PENDING
-**Priority:** Low
-
-Currently `/stop` only prevents the next tick from starting a task. If a task is actively
-running (subprocess), stopping should ideally wait for it to finish rather than leaving
-a half-executed task. Track the running subprocess PID in queue state so it can be
-inspected or terminated cleanly.
 
 ---
 
@@ -156,6 +143,17 @@ On daemon start, validate all active projects:
 - `tasks_file` exists
 - `claude_md` path exists (warn if missing, don't fail)
 Notify via Telegram on startup with any config warnings.
+
+---
+
+### TASK: Graceful shutdown on task in progress
+**Status:** PENDING
+**Priority:** Low
+
+Currently `/stop` only prevents the next tick from starting a task. If a task is actively
+running (subprocess), stopping should ideally wait for it to finish rather than leaving
+a half-executed task. Track the running subprocess PID in queue state so it can be
+inspected or terminated cleanly.
 
 ---
 

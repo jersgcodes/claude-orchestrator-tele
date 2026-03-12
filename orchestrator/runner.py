@@ -15,6 +15,18 @@ _EXTRA_PATH = "/opt/homebrew/bin:/usr/local/bin"
 _ENV = {**os.environ, "PATH": _EXTRA_PATH + ":" + os.environ.get("PATH", "")}
 
 
+def _has_uncommitted_changes(repo_path: Path) -> bool:
+    """Return True if the repo has uncommitted changes."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        env=_ENV,
+    )
+    return bool(result.stdout.strip())
+
+
 def run_task(task: dict, proj_cfg: dict, claude_path: str = CLAUDE_PATH) -> tuple[bool, str, bool]:
     """
     Execute a claude task inside the project repo.
@@ -28,12 +40,21 @@ def run_task(task: dict, proj_cfg: dict, claude_path: str = CLAUDE_PATH) -> tupl
     if claude_md.exists():
         context = f"<project_context>\n{claude_md.read_text()[:4000]}\n</project_context>\n\n"
 
+    if _has_uncommitted_changes(repo_path):
+        resume_instruction = (
+            "⚠️ IMPORTANT: You were interrupted mid-task. There are uncommitted changes in this "
+            "repo. Run `git status` and `git diff` to review what was already done, then continue "
+            "from exactly where work left off. Do NOT redo completed steps."
+        )
+    else:
+        resume_instruction = (
+            "Before starting, run `git status` to confirm the repo is clean, then start fresh."
+        )
+
     prompt = (
         f"{context}"
         f"Project: {task['project']}\n\n"
-        f"Before starting, run `git status` and `git diff` to check if work on this task was already "
-        f"partially done (e.g. the daemon was interrupted mid-run). If relevant uncommitted changes "
-        f"exist, continue from where work left off. Otherwise, start fresh.\n\n"
+        f"{resume_instruction}\n\n"
         f"Complete this task. Make all necessary code changes, run tests if available, "
         f"ensure nothing is broken. Summarise what you changed in 2-3 sentences at the end.\n\n"
         f"## Task\n{task['title']}\n\n"

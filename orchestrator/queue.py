@@ -105,6 +105,13 @@ def pop_next() -> Optional[dict]:
     return task
 
 
+def requeue_at_front(task: dict) -> None:
+    """Re-insert task at the front of the queue (for retries)."""
+    q = load()
+    q["tasks"].insert(0, task)
+    save(q)
+
+
 def skip_next() -> Optional[dict]:
     """Move first task to end of queue."""
     q = load()
