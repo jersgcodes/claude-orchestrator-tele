@@ -134,6 +134,30 @@ Allow users to pre-approve specific bash commands for a task before it runs, wit
 
 ## Infrastructure
 
+### TASK: Notify on daemon restart
+**Status:** PENDING
+**Priority:** High
+
+When the daemon starts (or restarts after a crash/reboot), send a Telegram message so the user knows:
+- Whether this is a fresh start or a launchd-triggered restart
+- Current queue depth and paused state
+- Any limit state that was persisted in queue.json
+
+Message format:
+```
+🔄 Orchestrator started
+Queue: 3 task(s) | Status: Running | Limits: OK
+```
+Or if restarting while a limit was active:
+```
+🔄 Orchestrator started
+Queue: 1 task(s) | Status: ⏸ Limit hit (DAILY) — resets in 2h 14m
+```
+
+**Implementation:** Add a startup notification call in `main()` in `mac_daemon.py`, after the bot is started and before `await asyncio.Event().wait()`. Reuse the existing `notify()` helper.
+
+---
+
 ### TASK: Add projects.yaml validation on startup
 **Status:** PENDING
 **Priority:** Medium
