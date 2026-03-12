@@ -154,7 +154,7 @@ Stop/Resume toggles based on current `paused` state.
 3. If limit hit: wait 4.5h then probe; notify on recovery
 4. Idle detection: if queue non-empty and last task >10min ago, alert (once/hour)
 5. `peek_next()` — returns first task not in `pending_approval` state
-6. If `require_approval` and no `approved_commands`: run `_request_task_approval()`, return
+6. If task has `requires_approval` and no `approved_commands`: run `_request_task_approval()`, return
 7. `run_task()` → `commit_and_push()`
 8. Record outcome in `stats.json`
 9. On limit: `set_limit_hit()`, task stays in queue

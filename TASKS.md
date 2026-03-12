@@ -108,12 +108,11 @@ inspected or terminated cleanly.
 Allow users to pre-approve specific bash commands for a task before it runs, without granting blanket `--dangerously-skip-permissions`.
 
 **Workflow:**
-1. Task is written in `tasks.md` as normal (title + description)
-2. When the task is next in queue, the orchestrator runs a **dry-run analysis** step — calls claude with a special prompt asking it to identify all bash commands it anticipates needing
-3. Bot sends a Telegram message listing the predicted restricted commands with Approve all / Deny buttons
-4. Approved commands are stored on the queued task as `approved_commands: [...]`
-5. When the task executes, runner passes approved commands to claude via `--allowedTools Bash(cmd),...` pattern
-6. Task runs with only those specific bash commands pre-approved — no blanket skip
+1. Task author adds `**Requires approval:**` section to the task in `tasks.md` listing exact commands
+2. When the task is next in queue, the orchestrator sends a Telegram approval request with those declared commands
+3. User approves or denies via inline buttons
+4. On approve: `approved_commands` stored on task, runs with `--allowedTools Bash(cmd),...` allowlist
+5. On deny: task removed from queue
 
 **Implemented:**
 - `task_reader.py` parses `**Requires approval:**` bullet section from tasks.md into `task["requires_approval"]`
