@@ -43,3 +43,17 @@ projects:
     tasks_file: "TASKS.md"
     claude_md: "CLAUDE.md"
     branch: "master"
+
+  miles-optimizer:
+    active: true
+    repo_path: ""          # set in projects.local.yaml
+    tasks_file: "TASKS.md"
+    claude_md: "CLAUDE.md"
+    branch: "main"
+
+  playo:
+    active: true
+    repo_path: ""          # set in projects.local.yaml
+    tasks_file: "TASKS.md"
+    claude_md: "CLAUDE.md"
+    branch: "main"
