@@ -99,6 +99,10 @@ def get_pending_tasks(repo_path: str, tasks_file: str) -> list[dict]:
             current_task["status"] = "PENDING"
         elif "Status: IN PROGRESS" in line:
             current_task["status"] = "IN PROGRESS"
+        elif "Status: USER ACTION" in line:
+            current_task["status"] = "USER ACTION"
+        elif "Status: BLOCKED" in line:
+            current_task["status"] = "BLOCKED"
 
         current_lines.append(line)
 
@@ -107,7 +111,7 @@ def get_pending_tasks(repo_path: str, tasks_file: str) -> list[dict]:
         _flush_task(current_task, current_lines)
         tasks.append(current_task)
 
-    return [t for t in tasks if t["status"] == "PENDING"]
+    return [t for t in tasks if t["status"] not in ("DONE", "COMPLETE", "USER ACTION", "BLOCKED")]
 
 
 def get_next_tasks(repo_path: str, tasks_file: str, n: int = 4) -> list[dict]:
