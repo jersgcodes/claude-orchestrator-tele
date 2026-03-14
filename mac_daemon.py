@@ -331,7 +331,11 @@ async def _set_commands(app: Application) -> None:
         ("clear",  "wipe entire queue"),
         ("help",   "show all commands"),
     ])
+    # Set menu button for the admin chat specifically so it shows for existing chats
+    admin_chat_id = app.bot_data.get("admin_chat_id")
     await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    if admin_chat_id:
+        await app.bot.set_chat_menu_button(chat_id=admin_chat_id, menu_button=MenuButtonCommands())
 
 
 def build_app(bot_token: str) -> Application:
@@ -359,6 +363,7 @@ async def main() -> None:
         sys.exit("TELEGRAM_BOT_TOKEN not set. Check projects.yaml or env vars.")
 
     app = build_app(bot_token)
+    app.bot_data["admin_chat_id"] = cfg["telegram"]["admin_chat_id"]
 
     async with app:
         await app.start()
