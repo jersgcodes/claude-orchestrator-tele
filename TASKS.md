@@ -157,6 +157,16 @@ inspected or terminated cleanly.
 
 ---
 
+### TASK: API registry audit
+**Status:** PENDING
+**Priority:** Low
+
+Run `scripts/audit_api_registry.py` to scan all projects for API usage patterns
+and compare against `~/claude/API_REGISTRY.md`. Update the registry with any
+new APIs found, remove any that no longer exist. Queue this monthly.
+
+---
+
 ### TASK: Support multiple active projects with round-robin queue
 **Status:** PENDING
 **Priority:** Low
